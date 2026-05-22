@@ -506,61 +506,16 @@ function makeGhost(cx, cy, color, id) {
 }
 
 // ---------- Movement helpers ----------
-function tryMove(entity, dir, speed, dt, passableFn) {
-  // Move toward center of current cell, then through the cell in direction.
-  // Use grid-aligned movement: only change direction at cell centers.
-  const cx = Math.floor(entity.px);
-  const cy = Math.floor(entity.py);
-  entity.cx = cx;
-  entity.cy = cy;
+// Next half-integer position along the direction of motion (in cell units).
+function nextSnap(p, dirSign) {
+  if (dirSign > 0) return Math.floor(p - 0.5) + 1.5;
+  if (dirSign < 0) return Math.ceil(p + 0.5) - 1.5;
+  return p;
+}
 
-  // Distance to center
-  const centerX = cx + 0.5;
-  const centerY = cy + 0.5;
-  const atCenterX = Math.abs(entity.px - centerX) < 0.05;
-  const atCenterY = Math.abs(entity.py - centerY) < 0.05;
-
-  // At center: choose new direction if available
-  if (atCenterX && atCenterY) {
-    entity.px = centerX;
-    entity.py = centerY;
-    // Validate dir against walls
-    const nx = wrapX(cx + dir.x);
-    const ny = cy + dir.y;
-    if (dir === DIRS.none || !passableFn(State.grid, nx, ny)) {
-      // can't move
-      return;
-    }
-  } else {
-    // Continue in current axis until reach center
-    // Force motion along the axis we're already traveling
-  }
-
-  // Move
-  let mx = dir.x * speed * dt;
-  let my = dir.y * speed * dt;
-
-  // Clamp so we don't pass center if direction reverses needed
-  entity.px += mx;
-  entity.py += my;
-
-  // Tunnel wrap
-  if (entity.px < 0) entity.px += COLS;
-  if (entity.px >= COLS) entity.px -= COLS;
-
-  // Wall collision check (entity into wall ahead)
-  const newCx = Math.floor(entity.px);
-  const newCy = Math.floor(entity.py);
-  if (newCx !== cx || newCy !== cy) {
-    if (!passableFn(State.grid, wrapX(newCx), newCy)) {
-      // Snap back to center of previous cell
-      entity.px = cx + 0.5;
-      entity.py = cy + 0.5;
-    } else {
-      entity.cx = wrapX(newCx);
-      entity.cy = newCy;
-    }
-  }
+function isAtCenter(p) {
+  const f = p - Math.floor(p);
+  return Math.abs(f - 0.5) < 1e-3;
 }
 
 // ---------- Update ----------
@@ -624,18 +579,17 @@ function updatePacman(dt) {
   let remaining = speed * dt;
   pac.mouth += dt * 10;
 
-  let safety = 32;
-  while (remaining > 1e-6 && safety-- > 0) {
+  let safety = 64;
+  while (remaining > 1e-9 && safety-- > 0) {
+    if (pac.px < 0) pac.px += COLS;
+    else if (pac.px >= COLS) pac.px -= COLS;
+
     const cx = Math.floor(pac.px);
     const cy = Math.floor(pac.py);
-    const centerX = cx + 0.5;
-    const centerY = cy + 0.5;
-    const dx = pac.px - centerX;
-    const dy = pac.py - centerY;
 
-    if (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4) {
-      pac.px = centerX;
-      pac.py = centerY;
+    if (isAtCenter(pac.px) && isAtCenter(pac.py)) {
+      pac.px = cx + 0.5;
+      pac.py = cy + 0.5;
       pac.cx = cx;
       pac.cy = cy;
       eatAt(cx, cy);
@@ -657,17 +611,24 @@ function updatePacman(dt) {
       if (pac.dir === DIRS.none) return;
     }
 
-    const distRemaining = Math.abs(pac.dir.x) * (pac.dir.x > 0 ? (centerX + 1 - pac.px) : (pac.px - (centerX - 1)))
-                       + Math.abs(pac.dir.y) * (pac.dir.y > 0 ? (centerY + 1 - pac.py) : (pac.py - (centerY - 1)));
-    const step = Math.min(remaining, Math.max(distRemaining, 1e-6));
-    pac.px += pac.dir.x * step;
-    pac.py += pac.dir.y * step;
-    remaining -= step;
+    const targetX = nextSnap(pac.px, pac.dir.x);
+    const targetY = nextSnap(pac.py, pac.dir.y);
+    const dist = Math.abs(targetX - pac.px) + Math.abs(targetY - pac.py);
+    if (dist < 1e-9) break;
 
-    if (pac.px < 0) pac.px += COLS;
-    if (pac.px >= COLS) pac.px -= COLS;
+    const step = Math.min(remaining, dist);
+    if (step >= dist - 1e-9) {
+      pac.px = targetX;
+      pac.py = targetY;
+    } else {
+      pac.px += pac.dir.x * step;
+      pac.py += pac.dir.y * step;
+    }
+    remaining -= step;
   }
 
+  if (pac.px < 0) pac.px += COLS;
+  else if (pac.px >= COLS) pac.px -= COLS;
   pac.cx = Math.floor(pac.px);
   pac.cy = Math.floor(pac.py);
 }
@@ -705,18 +666,17 @@ function updateGhost(g, dt) {
   const speed = (g.vulnerable ? 0.6 : 1.0) * (g.eaten ? 2.2 : 1.0) * GHOST_BASE * State.config.ghostSpeed;
   let remaining = speed * dt;
 
-  let safety = 32;
-  while (remaining > 1e-6 && safety-- > 0) {
+  let safety = 64;
+  while (remaining > 1e-9 && safety-- > 0) {
+    if (g.px < 0) g.px += COLS;
+    else if (g.px >= COLS) g.px -= COLS;
+
     const cx = Math.floor(g.px);
     const cy = Math.floor(g.py);
-    const centerX = cx + 0.5;
-    const centerY = cy + 0.5;
-    const dx = g.px - centerX;
-    const dy = g.py - centerY;
 
-    if (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4) {
-      g.px = centerX;
-      g.py = centerY;
+    if (isAtCenter(g.px) && isAtCenter(g.py)) {
+      g.px = cx + 0.5;
+      g.py = cy + 0.5;
       g.cx = cx;
       g.cy = cy;
 
@@ -729,17 +689,24 @@ function updateGhost(g, dt) {
       if (g.dir === DIRS.none) return;
     }
 
-    const distRemaining = Math.abs(g.dir.x) * (g.dir.x > 0 ? (centerX + 1 - g.px) : (g.px - (centerX - 1)))
-                       + Math.abs(g.dir.y) * (g.dir.y > 0 ? (centerY + 1 - g.py) : (g.py - (centerY - 1)));
-    const step = Math.min(remaining, Math.max(distRemaining, 1e-6));
-    g.px += g.dir.x * step;
-    g.py += g.dir.y * step;
-    remaining -= step;
+    const targetX = nextSnap(g.px, g.dir.x);
+    const targetY = nextSnap(g.py, g.dir.y);
+    const dist = Math.abs(targetX - g.px) + Math.abs(targetY - g.py);
+    if (dist < 1e-9) break;
 
-    if (g.px < 0) g.px += COLS;
-    if (g.px >= COLS) g.px -= COLS;
+    const step = Math.min(remaining, dist);
+    if (step >= dist - 1e-9) {
+      g.px = targetX;
+      g.py = targetY;
+    } else {
+      g.px += g.dir.x * step;
+      g.py += g.dir.y * step;
+    }
+    remaining -= step;
   }
 
+  if (g.px < 0) g.px += COLS;
+  else if (g.px >= COLS) g.px -= COLS;
   g.cx = Math.floor(g.px);
   g.cy = Math.floor(g.py);
 }
